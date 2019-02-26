@@ -1,0 +1,342 @@
+---
+title: "ESM 244 Lab Week 8 Key"
+author: "Allison Horst"
+date: "February 25, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message = FALSE, warning = FALSE}
+
+# General packages
+library(tidyverse)
+library(janitor)
+library(plotly)
+library(RColorBrewer)
+
+# Packages for cluster analysis:
+library(NbClust)
+library(cluster)
+library(factoextra)
+library(dendextend)
+library(ggdendro)
+
+# Packages for text mining/sentiment analysis/word cloud
+library(pdftools)
+library(tidytext)
+library(wordcloud)
+```
+
+#### Part 1. K-means clustering: 
+Nevermind...back to irises dataset? 
+```{r}
+
+iris_nice <- iris %>% 
+  clean_names()
+
+ggplot(iris_nice) +
+  geom_point(aes(x = petal_length, y = petal_width, color = species))
+
+ggplot(iris_nice) +
+  geom_point(aes(x = sepal_length, y = sepal_width, color = species))
+
+# How many clusters do you THINK there should be? 
+number_est <- NbClust(iris_nice[1:4], min.nc = 2, max.nc = 10, method = "kmeans")
+
+# By these estimators, 2 is the best number of clusters...but should that change our mind? Maybe...
+
+# What if we consider similarities across all four variables? 
+
+iris_km <- kmeans(iris_nice[1:4], 3) # kmeans specifying 3 groups!
+
+iris_km$size
+iris_km$centers
+iris_km$cluster
+
+# Bind the cluster number to the original data
+
+iris_cl <- data.frame(iris_nice, cluster_no = factor(iris_km$cluster))
+
+ggplot(iris_cl) +
+  geom_point(aes(x = sepal_length, y = sepal_width, color = cluster_no))
+```
+
+A little better...
+```{r}
+
+ggplot(iris_cl) +
+  geom_point(aes(x = petal_length, 
+                 y = petal_width, 
+                 color = cluster_no, 
+                 pch = species)) +
+  scale_color_brewer(palette = "Set2")
+
+```
+
+Make it 3D with plot_ly()...
+```{r}
+# Or, a 3D plot with plotly
+
+plot_ly(x = iris_cl$petal_length, 
+        y = iris_cl$petal_width, 
+        z = iris_cl$sepal_width, 
+        type = "scatter3d", 
+        color = iris_cl$cluster_no, 
+        symbol = ~iris_cl$species,
+        marker = list(size = 3),
+        colors = "Set1")
+```
+
+####Part 2. Cluster analysis: hierarchical
+
+Hierarchical cluster analysis (dendrograms) in R
+
+Relevant functions:
+
+stats::hclust() - agglomerative hierarchical clustering
+cluster::diana() - divisive hierarchical clustering
+
+We'll be using WorldBank environmental data (simplified), wb_env.csv
+```{r}
+
+# Get the data
+wb_env <- read_csv("wb_env.csv")
+
+# Only keep top 20 greenhouse gas emitters (for simplifying visualization here...)
+wb_ghg_20 <- wb_env %>% 
+  arrange(-ghg) %>% 
+  head(20)
+
+# Scale it (can consider this for k-means clustering, too...)
+wb_scaled <- as.data.frame(scale(wb_ghg_20[3:7]))
+
+# Update to add rownames (country name)
+rownames(wb_scaled) <- wb_ghg_20$name
+
+# Compute dissimilarity values (Euclidean distances):
+diss <- dist(wb_scaled, method = "euclidean")
+
+# Hierarchical clustering (complete linkage)
+hc_complete <- hclust(diss, method = "complete" )
+
+# Plot it (base plot):
+plot(hc_complete, cex = 0.6, hang = -1)
+
+```
+
+Divisive clustering:
+```{r}
+hc_div <- diana(diss)
+
+plot(hc_div, hang = -1)
+rect.hclust(hc_div, k = 4, border = 2:5)
+```
+
+We might want to compare those...because they differ slightly.
+```{r}
+
+# Convert to class dendrogram
+dend1 <- as.dendrogram(hc_complete)
+dend2 <- as.dendrogram(hc_div)
+
+# Combine into list
+dend_list <- dendlist(dend1,dend2)
+
+tanglegram(dend1, dend2)
+
+# Convert to class 'dendro' for ggplotting
+data1 <- dendro_data(hc_complete)
+
+
+# Simple plot with ggdendrogram
+ggdendrogram(hc_complete, 
+             rotate = TRUE) +
+  theme_minimal() +
+  labs(x = "Country")
+
+# Want to do it actually in ggplot? Here: 
+label_data <- bind_cols(filter(segment(data1), x == xend & x%%1 == 0), label(data1))
+
+ggplot() + 
+geom_segment(data=segment(data1), aes(x=x, y=y, xend=xend, yend=yend)) +
+geom_text(data=label_data, aes(x=xend, y=yend, label=label, hjust=0), size=2) +
+coord_flip() + 
+scale_y_reverse(expand=c(0.2, 0)) +
+theme_bw() +
+theme(panel.border = element_blank(),
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      axis.line = element_blank(),
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      legend.position = "None") 
+
+```
+
+
+####Part 3. Intro to text analysis: pdftools, stringr intro, tidytext
+
+Note: for a more complete text analysis introduction, I recommend forking and working through Casey O'Hara and Jessica Couture's eco-data-sci workshop (available here  <https://github.com/oharac/text_workshop>)
+
+We'll use pdftools to extra text from PDFs, then do some analysis
+```{r}
+
+greta_thunberg <- file.path("greta_thunberg.pdf")
+thunberg_text <- pdf_text(greta_thunberg)
+
+# Just call thunberg_text in the console to see the full text
+
+```
+
+From Casey and Jessica's workshop:
+
+"`pdf_text()` returns a vector of strings, one for each page of the pdf.  So we can mess with it in tidyverse style, let's turn it into a dataframe, and keep track of the pages.
+
+Then we can use `stringr::str_split()` to break the pages up into individual lines.  Each line of the pdf is concluded with a backslash-n, so split on this.  We will also add a line number in addition to the page number."
+
+First, make it a data frame and do some wrangling.
+```{r}
+
+thunberg_df <- data.frame(text = thunberg_text) %>% 
+  mutate(text_full = str_split(text, '\\n')) %>% 
+  unnest(text_full)
+
+speech_text <- thunberg_df %>% # Get the full speech
+  select(text_full) %>% # Only keep the text
+  slice(4:18) # Filter by row number
+
+```
+
+Now we just have the text in an easy-to-use format. 
+
+We can use tidytext::unnest_tokens to separate all the words
+
+```{r}
+
+sep_words <- speech_text %>% 
+  unnest_tokens(word, text_full)
+
+```
+
+Then count how many times they each show up...
+```{r}
+
+word_counts <- sep_words %>% 
+  count(word, sort = TRUE)
+
+```
+
+...but a lot of those words aren't really things we're interested in counting...
+...luckily, there's a thing for that.
+
+"Stop words" are common words that aren't generally relevant for searching or analyzing things. We can have R remove those.
+
+```{r}
+
+words_stop <- sep_words %>% 
+  anti_join(stop_words) # Remove the stop words
+
+# And we can count them
+word_count <- words_stop %>% 
+  count(word, sort = TRUE) # Count words and arrange
+
+```
+
+Some intro sentiment analysis.
+
+First, check out the 'sentiments' lexicon. From tidytext (<https://www.tidytextmining.com/sentiment.html>): 
+
+"The three general-purpose lexicons are
+
+- AFINN from Finn Årup Nielsen,
+- bing from Bing Liu and collaborators, and
+- nrc from Saif Mohammad and Peter Turney
+
+All three of these lexicons are based on unigrams, i.e., single words. These lexicons contain many English words and the words are assigned scores for positive/negative sentiment, and also possibly emotions like joy, anger, sadness, and so forth. The nrc lexicon categorizes words in a binary fashion (“yes”/“no”) into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust. The bing lexicon categorizes words in a binary fashion into positive and negative categories. The AFINN lexicon assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment. All of this information is tabulated in the sentiments dataset, and tidytext provides a function get_sentiments() to get specific sentiment lexicons without the columns that are not used in that lexicon."
+
+```{r}
+
+get_sentiments("afinn")
+
+# Examples of really awesome words:
+pos_words <- get_sentiments("afinn") %>% 
+  filter(score == 5 | score == 4) %>% 
+  head(20)
+
+# You can look up negative words on your own, (but yes, it includes the worst words you can think of)
+
+neutral_words <- get_sentiments("afinn") %>% 
+  filter(between(score,-1,1)) %>% 
+  head(20)
+
+# Explore the other sentiment lexicons:
+get_sentiments("nrc") # Assigns words to sentiment "groups"
+get_sentiments("bing") # Binary; either "positive" or "negative"
+```
+
+So how do the non-stop-words in Greta's speech get ranked?
+
+```{r}
+
+# Recall what those words looked like: 
+words_stop
+
+# Let's see how they're aligned with each of the different lexicons
+# Note: the context is lost. Let's see how that manifests here. 
+
+sent_afinn <- words_stop %>% 
+  inner_join(get_sentiments("afinn"))
+
+sent_nrc <- words_stop %>% 
+  inner_join(get_sentiments("nrc"))
+
+sent_bing <- words_stop %>% 
+  inner_join(get_sentiments("bing"))
+
+```
+
+Then you can imagine there are different ways to quantify those outcomes...
+
+Here are just a few examples: 
+
+```{r}
+# What are the most common sentiment groups (by NRC)?
+nrc_count <- sent_nrc %>% 
+  group_by(sentiment) %>% 
+  tally()
+
+nrc_count
+
+# Orrr we can just count up the positive and negative outcomes from bing: 
+
+bing_count <- sent_bing %>% 
+  group_by(sentiment) %>% 
+  tally()
+
+bing_count
+
+# Or we can find a mean or median score based on the afinn lexicon: 
+
+afinn_summary <- sent_afinn %>% 
+  summarize(
+    mean = mean(score),
+    sd = sd(score),
+    median = median(score)
+  )
+  
+```
+
+Make a word cloud:
+
+```{r}
+wordcloud(word_count$word, 
+          freq = word_count$n, 
+          min.freq = 1, 
+          max.words = 65, 
+          scale = c(2, 0.1),
+          colors = brewer.pal(3, "Dark2"))
+```
