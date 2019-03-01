@@ -1,0 +1,212 @@
+---
+title: "lab-8-working"
+author: "Vienna Saccomanno"
+date: "2/28/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# General packages
+library(tidyverse)
+library(janitor)
+library(plotly)
+library(RColorBrewer)
+
+# Packages for cluster analysis:
+library(NbClust)
+library(cluster)
+library(factoextra)
+library(mvtnorm)
+library(dendextend)
+library(ggdendro)
+
+
+# Packages for text mining/sentiment analysis/word cloud
+library(pdftools)
+library(tidytext)
+library(wordcloud)
+```
+
+###Part 1. k-means clustering
+
+```{r}
+iris_nice <- iris %>% 
+  clean_names()
+
+ggplot(iris_nice) +
+  geom_point(aes(x = petal_length, y = petal_width, color = species))
+
+ggplot(iris_nice) +
+  geom_point(aes(x = sepal_length, y = sepal_width, color = species))
+
+```
+
+How many clusters does R think should exist? It is clear to us that there should be 3. Use NvClust
+
+```{r}
+
+number_est <- NbClust(iris_nice[1:4], min.nc = 2, max.nc = 10, method = "kmeans")
+
+# By these estimators, 2 is the best number of clusters...but should that change our mind? Maybe...
+
+# What if we consider similarities across all four variables? 
+
+```
+
+Perform k-means clustering with 3 groups:
+
+```{r}
+iris_km<-kmeans(iris_nice[1:4],3) #forcing three clusters
+
+#Exploratory
+iris_km$size # 62 38 50
+
+iris_km$centers
+
+iris_km$cluster #looking at overlap
+
+# Bind the cluster number to the original data
+iris_cl <- data.frame(iris_nice, cluster_no = factor(iris_km$cluster)) #make it a factor
+#original cleaned up data + cluster number
+
+
+#Basic ggplot
+ggplot(iris_cl) +
+  geom_point(aes(x = sepal_length, y = sepal_width, color = cluster_no))
+#looking at 2 different variables. See observations that overlab with clusters
+
+```
+
+
+A little better...
+```{r}
+
+ggplot(iris_cl) +
+  geom_point(aes(x = petal_length, 
+                 y = petal_width, 
+                 color = cluster_no, 
+                 pch = species)) +
+  scale_color_brewer(palette = "Set2")
+
+```
+
+Make it 3D with plot_ly()...
+```{r}
+# Or, a 3D plot with plotly
+
+plot_ly(x = iris_cl$petal_length, 
+        y = iris_cl$petal_width, 
+        z = iris_cl$sepal_width, 
+        type = "scatter3d", 
+        color = iris_cl$cluster_no, 
+        symbol = ~iris_cl$species,
+        marker = list(size = 3),
+        colors = "Set1")
+```
+
+####Part 2. Cluster analysis: hierarchical
+
+Hierarchical cluster analysis (dendrograms) in R
+
+Relevant functions:
+
+stats::hclust() - agglomerative hierarchical clustering
+cluster::diana() - divisive hierarchical clustering
+
+We'll be using WorldBank environmental data (simplified), wb_env.csv
+```{r}
+
+# Get the data
+wb_env <- read_csv("wb_env.csv")
+
+# Only keep top 20 greenhouse gas emitters (for simplifying visualization here...)
+wb_ghg_20 <- wb_env %>% 
+  arrange(-ghg) %>% 
+  head(20)
+
+# Scale it (can consider this for k-means clustering, too...)
+wb_scaled <- as.data.frame(scale(wb_ghg_20[3:7]))
+
+# Update to add rownames (country name)
+rownames(wb_scaled) <- wb_ghg_20$name
+
+# Compute dissimilarity values (Euclidean distances):
+diss <- dist(wb_scaled, method = "euclidean")
+
+# Hierarchical clustering (complete linkage)
+hc_complete <- hclust(diss, method = "complete" )
+
+# Plot it (base plot):
+plot(hc_complete, cex = 0.6, hang = -1)
+
+```
+
+Divisive clustering:
+```{r}
+hc_div <- diana(diss)
+
+plot(hc_div, hang = -1)
+rect.hclust(hc_div, k = 4, border = 2:5)
+```
+
+We might want to compare those...because they differ slightly.
+```{r}
+
+# Convert to class dendrogram
+dend1 <- as.dendrogram(hc_complete)
+dend2 <- as.dendrogram(hc_div)
+
+# Combine into list
+dend_list <- dendlist(dend1,dend2)
+
+tanglegram(dend1, dend2)
+
+# Convert to class 'dendro' for ggplotting
+data1 <- dendro_data(hc_complete)
+
+
+# Simple plot with ggdendrogram
+ggdendrogram(hc_complete, 
+             rotate = TRUE) +
+  theme_minimal() +
+  labs(x = "Country")
+
+# Want to do it actually in ggplot? Here: 
+label_data <- bind_cols(filter(segment(data1), x == xend & x%%1 == 0), label(data1))
+
+ggplot() + 
+geom_segment(data=segment(data1), aes(x=x, y=y, xend=xend, yend=yend)) +
+geom_text(data=label_data, aes(x=xend, y=yend, label=label, hjust=0), size=2) +
+coord_flip() + 
+scale_y_reverse(expand=c(0.2, 0)) +
+theme_bw() +
+theme(panel.border = element_blank(),
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      axis.line = element_blank(),
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      legend.position = "None") 
+
+```
+
+####Part 3. Intro to text analysis: pdftools, stringr intro, tidytext
+
+Note: for a more complete text analysis introduction, I recommend forking and working through Casey O'Hara and Jessica Couture's eco-data-sci workshop (available here  <https://github.com/oharac/text_workshop>)
+
+We'll use pdftools to extra text from PDFs, then do some analysis
+```{r}
+
+#extracting text-based information from her speech about climate change
+greta_thunberg <- file.path("greta_thunberg.pdf") #file path specifies a path for the pdf text function
+thunberg_text <- pdf_text(greta_thunberg)
+
+# Just call thunberg_text in the console to see the full text
+
+```
+
