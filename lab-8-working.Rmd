@@ -210,3 +210,159 @@ thunberg_text <- pdf_text(greta_thunberg)
 
 ```
 
+From Casey and Jessica's workshop:
+
+"`pdf_text()` returns a vector of strings, one for each page of the pdf.  So we can mess with it in tidyverse style, let's turn it into a dataframe, and keep track of the pages.
+
+Then we can use `stringr::str_split()` to break the pages up into individual lines.  Each line of the pdf is concluded with a backslash-n, so split on this.  We will also add a line number in addition to the page number."
+
+First, make it a data frame and do some wrangling.
+
+```{r}
+
+#tuning a vectors of strings into a df
+thunberg_df <- data.frame(text = thunberg_text) %>% 
+  mutate(text_full = str_split(text, '\\n')) %>% #breaking up string because it currently exists in a single string. Splitting up by the \n
+  unnest(text_full)
+
+speech_text <- thunberg_df %>% # Get the full speech
+  select(text_full) %>% # Only keep the text (avoid the title and credits)
+  slice(4:18) # Filter by row number - remove the title
+```
+
+Now we just have the text in an easy-to-use format. 
+
+We can use tidytext::unnest_tokens to separate all the words
+
+```{r}
+#breaking up by individual words
+
+sep_words <- speech_text %>% 
+  unnest_tokens(word, text_full) #using tidytext
+```
+
+Then count how many times they each show up...
+```{r}
+
+word_counts <- sep_words %>% 
+  count(word, sort = TRUE) #sort so it actually sorts them
+
+```
+
+...but a lot of those words aren't really things we're interested in counting...
+...luckily, there's a thing for that.
+
+"Stop words" are common words that aren't generally relevant for searching or analyzing things. We can have R remove those.
+
+```{r}
+words_stop <- sep_words %>% 
+  anti_join(stop_words) # Remove the stop words - this is in a tidytext lexicons
+
+# And we can count them
+word_count <- words_stop %>% 
+  count(word, sort = TRUE) # Count words and arrange
+
+```
+
+Some intro sentiment analysis.
+
+First, check out the 'sentiments' lexicon. From tidytext (<https://www.tidytextmining.com/sentiment.html>): 
+
+"The three general-purpose lexicons are
+
+- AFINN from Finn Årup Nielsen,
+- bing from Bing Liu and collaborators, and
+- nrc from Saif Mohammad and Peter Turney
+
+All three of these lexicons are based on unigrams, i.e., single words. These lexicons contain many English words and the words are assigned scores for positive/negative sentiment, and also possibly emotions like joy, anger, sadness, and so forth. The nrc lexicon categorizes words in a binary fashion (“yes”/“no”) into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust. The bing lexicon categorizes words in a binary fashion into positive and negative categories. The AFINN lexicon assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment. All of this information is tabulated in the sentiments dataset, and tidytext provides a function get_sentiments() to get specific sentiment lexicons without the columns that are not used in that lexicon."
+
+```{r}
+#Learning about the lexicon
+get_sentiments("afinn")
+
+# Examples of really awesome words:
+pos_words <- get_sentiments("afinn") %>% 
+  filter(score == 5 | score == 4) %>% 
+  head(20)
+
+# You can look up negative words on your own, (but yes, it includes the worst words you can think of)
+neutral_words <- get_sentiments("afinn") %>% 
+  filter(between(score,-1,1)) %>% 
+  head(20)
+
+# Explore the other sentiment lexicons:
+get_sentiments("nrc") # Assigns words to sentiment "groups"
+get_sentiments("bing") # Binary; either "positive" or "negative"
+```
+
+So how do the non-stop-words in Greta's speech get ranked?
+
+```{r}
+
+# Recall what those words looked like: 
+words_stop
+
+# Let's see how they're aligned with each of the different lexicons
+# Note: the context is lost. Let's see how that manifests here. 
+
+sent_afinn <- words_stop %>% #words from the actual speech
+  inner_join(get_sentiments("afinn")) #only keeps things that match from both frams and removes the rest
+#View(sent_afin) only inlcudes the words that match
+
+sent_nrc <- words_stop %>% 
+  inner_join(get_sentiments("nrc")) #"justice" = trust bin and positive bin
+
+nrc_count<-sent_nrc %>% 
+  group_by(sentiment) %>% 
+  tally()
+
+sent_bing <- words_stop %>% 
+  inner_join(get_sentiments("bing"))
+
+```
+
+```{r}
+
+```
+
+Then you can imagine there are different ways to quantify those outcomes...
+
+Here are just a few examples: 
+
+```{r}
+# What are the most common sentiment groups (by NRC)?
+nrc_count <- sent_nrc %>% 
+  group_by(sentiment) %>% 
+  tally()
+
+nrc_count
+
+# Orrr we can just count up the positive and negative outcomes from bing: 
+
+bing_count <- sent_bing %>% 
+  group_by(sentiment) %>% 
+  tally()
+
+bing_count
+
+# Or we can find a mean or median score based on the afinn lexicon: 
+
+afinn_summary <- sent_afinn %>% 
+  summarize(
+    mean = mean(score),
+    sd = sd(score),
+    median = median(score)
+  )
+  
+```
+
+Make a word cloud:
+
+```{r}
+wordcloud(word_count$word, 
+          freq = word_count$n, 
+          min.freq = 1, 
+          max.words = 65, 
+          scale = c(2, 0.1),
+          colors = brewer.pal(3, "Dark2"))
+```
